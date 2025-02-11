@@ -1,32 +1,19 @@
 <?php
-$host   = '100.104.103.66';
-$dbname = 'brasileirao';
-$user   = 'goat';
-$pass   = 'Refacty_db5498!#';
-
-try {
-    $conn = new PDO("mysql:host=$host;dbname=$dbname;charset=utf8", $user, $pass);
-    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-} catch (PDOException $e) {
-    die("Erro na conexão com o banco de dados: " . $e->getMessage());
-}
-
+session_start();
+require_once 'config.php';
+$conn = Config::getConn();
 function gerarConfrontosBrasileirao(PDO $conn) {
     $sqlTimes = "SELECT id FROM times ORDER BY nome";
     $stmtTimes = $conn->query($sqlTimes);
     $allTeams = $stmtTimes->fetchAll(PDO::FETCH_COLUMN);
-
     $n = count($allTeams);
     if ($n < 2) {
         return;
     }
-
-    $pivo   = array_shift($allTeams);
+    $pivo = array_shift($allTeams);
     $others = $allTeams;
     $m = $n - 1;
-
     $roundsIda = [];
-
     for ($roundIndex = 0; $roundIndex < $m; $roundIndex++) {
         $roundMatches = [];
         $pivoCasa = (($roundIndex % 2) == 0);
@@ -35,66 +22,54 @@ function gerarConfrontosBrasileirao(PDO $conn) {
             $timeForaIndex += count($others);
         }
         $timeForaId = $others[$timeForaIndex];
-
         if ($pivoCasa) {
             $roundMatches[] = ['casa' => $pivo, 'fora' => $timeForaId];
         } else {
             $roundMatches[] = ['casa' => $timeForaId, 'fora' => $pivo];
         }
-
         $temp = $others;
         array_splice($temp, $timeForaIndex, 1);
-
         $half = count($temp) / 2;
-        $left  = array_slice($temp, 0, $half);
+        $left = array_slice($temp, 0, $half);
         $right = array_slice($temp, $half);
         $right = array_reverse($right);
-
         for ($i = 0; $i < $half; $i++) {
             $teamA = $left[$i];
             $teamB = $right[$i];
             if ($roundIndex % 2 == 0) {
-                $roundMatches[] = [ 'casa' => $teamA, 'fora' => $teamB ];
+                $roundMatches[] = ['casa' => $teamA, 'fora' => $teamB];
             } else {
-                $roundMatches[] = [ 'casa' => $teamB, 'fora' => $teamA ];
+                $roundMatches[] = ['casa' => $teamB, 'fora' => $teamA];
             }
         }
-
         $roundsIda[] = $roundMatches;
         $last = array_pop($others);
         array_unshift($others, $last);
     }
-
     $roundsVolta = [];
     foreach ($roundsIda as $rodada) {
         $rodadaVolta = [];
         foreach ($rodada as $partida) {
-            $rodadaVolta[] = [
-                'casa' => $partida['fora'],
-                'fora' => $partida['casa']
-            ];
+            $rodadaVolta[] = ['casa' => $partida['fora'], 'fora' => $partida['casa']];
         }
         $roundsVolta[] = $rodadaVolta;
     }
-
     $dataInicial = new DateTime('2024-04-01 15:00:00');
-    $intervalo   = new DateInterval('P3D');
+    $intervalo = new DateInterval('P3D');
     $stmtInsert = $conn->prepare("
        INSERT INTO partidas
        (time_casa_id, time_fora_id, rodada, data_partida, gols_casa, gols_fora, campeonato)
        VALUES
        (:casa, :fora, :rodada, :data_partida, NULL, NULL, 'Brasileirao2024')
     ");
-
     $rodadaNumero = 1;
-    $dataPartida  = clone $dataInicial;
-
+    $dataPartida = clone $dataInicial;
     foreach ($roundsIda as $roundMatches) {
         foreach ($roundMatches as $partida) {
             $stmtInsert->execute([
-                ':casa'         => $partida['casa'],
-                ':fora'         => $partida['fora'],
-                ':rodada'       => $rodadaNumero,
+                ':casa' => $partida['casa'],
+                ':fora' => $partida['fora'],
+                ':rodada' => $rodadaNumero,
                 ':data_partida' => $dataPartida->format('Y-m-d H:i:s')
             ]);
         }
@@ -104,9 +79,9 @@ function gerarConfrontosBrasileirao(PDO $conn) {
     foreach ($roundsVolta as $roundMatches) {
         foreach ($roundMatches as $partida) {
             $stmtInsert->execute([
-                ':casa'         => $partida['casa'],
-                ':fora'         => $partida['fora'],
-                ':rodada'       => $rodadaNumero,
+                ':casa' => $partida['casa'],
+                ':fora' => $partida['fora'],
+                ':rodada' => $rodadaNumero,
                 ':data_partida' => $dataPartida->format('Y-m-d H:i:s')
             ]);
         }
@@ -114,20 +89,30 @@ function gerarConfrontosBrasileirao(PDO $conn) {
         $rodadaNumero++;
     }
 }
-
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header("Location: " . $_SERVER['PHP_SELF']);
+    exit;
+}
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset'])) {
+    if (!isset($_SESSION['usuario_id'])) {
+        echo "<script>alert('Você precisa se logar para executar esta função.');window.history.back();</script>";
+        exit;
+    }
     $conn->exec("TRUNCATE TABLE partidas");
     gerarConfrontosBrasileirao($conn);
     header("Location: " . $_SERVER['PHP_SELF']);
     exit;
 }
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['simularRodada'])) {
+    if (!isset($_SESSION['usuario_id'])) {
+        echo "<script>alert('Você precisa se logar para executar esta função.');window.history.back();</script>";
+        exit;
+    }
     $sqlSim = "SELECT id FROM partidas WHERE rodada = :rodada AND (gols_casa IS NULL OR gols_fora IS NULL)";
     $stmtSim = $conn->prepare($sqlSim);
     $stmtSim->execute([':rodada' => $_POST['rodadaAtual'] ?? 1]);
     $matchesSim = $stmtSim->fetchAll(PDO::FETCH_ASSOC);
-
     foreach ($matchesSim as $m) {
         $gc = rand(0,5);
         $gf = rand(0,5);
@@ -138,43 +123,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['simularRodada'])) {
     header("Location: " . $_SERVER['PHP_SELF']."?rodada=".$r);
     exit;
 }
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'updatePlacar') {
-    $matchId  = $_POST['match_id']  ?? null;
+    if (!isset($_SESSION['usuario_id'])) {
+        echo json_encode(['status'=>'error','message'=>'Você precisa se logar']);
+        exit;
+    }
+    $matchId = $_POST['match_id'] ?? null;
     $golsCasa = $_POST['gols_casa'] ?? null;
     $golsFora = $_POST['gols_fora'] ?? null;
-
     if ($matchId !== null && $golsCasa !== null && $golsFora !== null) {
         $gc = (int)$golsCasa;
         $gf = (int)$golsFora;
         if ($gc < 0) { $gc = 0; }
         if ($gf < 0) { $gf = 0; }
-
-        $sql = "UPDATE partidas 
-                   SET gols_casa = :c, gols_fora = :f 
-                 WHERE id = :id";
+        $sql = "UPDATE partidas SET gols_casa = :c, gols_fora = :f WHERE id = :id";
         $stmt = $conn->prepare($sql);
-        $stmt->execute([
-            ':c'  => $gc,
-            ':f'  => $gf,
-            ':id' => (int)$matchId
-        ]);
-
-        echo json_encode(['status' => 'ok']);
+        $stmt->execute([':c'=>$gc, ':f'=>$gf, ':id'=>(int)$matchId]);
+        echo json_encode(['status'=>'ok']);
         exit;
     }
-    echo json_encode(['status' => 'error', 'message' => 'Parâmetros inválidos']);
+    echo json_encode(['status'=>'error','message'=>'Parâmetros inválidos']);
     exit;
 }
-
 $stmtMinMax = $conn->query("SELECT MIN(rodada) AS minRod, MAX(rodada) AS maxRod FROM partidas");
-$resMinMax  = $stmtMinMax->fetch(PDO::FETCH_ASSOC);
-$minRodada  = $resMinMax['minRod'] ? (int)$resMinMax['minRod'] : 1;
-$maxRodada  = $resMinMax['maxRod'] ? (int)$resMinMax['maxRod'] : 1;
-
+$resMinMax = $stmtMinMax->fetch(PDO::FETCH_ASSOC);
+$minRodada = $resMinMax['minRod'] ? (int)$resMinMax['minRod'] : 1;
+$maxRodada = $resMinMax['maxRod'] ? (int)$resMinMax['maxRod'] : 1;
 $selectedRound = isset($_GET['rodada']) ? (int)$_GET['rodada'] : $minRodada;
 $selectedRound = max($minRodada, min($selectedRound, $maxRodada));
-
 $queryPartidas = "
     SELECT p.id, p.rodada, p.data_partida,
            p.time_casa_id, p.time_fora_id,
@@ -189,45 +165,38 @@ $queryPartidas = "
 $stmtAllMatches = $conn->prepare($queryPartidas);
 $stmtAllMatches->execute();
 $allMatches = $stmtAllMatches->fetchAll(PDO::FETCH_ASSOC);
-
 $selectedRoundMatches = array_filter($allMatches, function($m) use ($selectedRound) {
     return $m['rodada'] == $selectedRound;
 });
-
 $sqlTimes = "SELECT id, nome, sigla, escudo FROM times";
 $stmtTimes = $conn->query($sqlTimes);
 $timesData = $stmtTimes->fetchAll(PDO::FETCH_ASSOC);
-
 $teams = [];
 foreach ($timesData as $t) {
     $teams[$t['id']] = [
-        'nome'        => $t['nome'],
-        'sigla'       => $t['sigla'],
-        'escudo'      => $t['escudo'],
-        'pontos'      => 0,
-        'jogos'       => 0,
-        'vitorias'    => 0,
-        'empates'     => 0,
-        'derrotas'    => 0,
-        'gols_pro'    => 0,
-        'gols_contra' => 0,
-        'saldo'       => 0
+        'nome'=>$t['nome'],
+        'sigla'=>$t['sigla'],
+        'escudo'=>$t['escudo'],
+        'pontos'=>0,
+        'jogos'=>0,
+        'vitorias'=>0,
+        'empates'=>0,
+        'derrotas'=>0,
+        'gols_pro'=>0,
+        'gols_contra'=>0,
+        'saldo'=>0
     ];
 }
-
 foreach ($allMatches as $partida) {
     if ($partida['gols_casa'] !== null && $partida['gols_fora'] !== null) {
         $idCasa = $partida['time_casa_id'];
         $idFora = $partida['time_fora_id'];
-
         $teams[$idCasa]['jogos']++;
         $teams[$idFora]['jogos']++;
-
-        $teams[$idCasa]['gols_pro']    += $partida['gols_casa'];
+        $teams[$idCasa]['gols_pro'] += $partida['gols_casa'];
         $teams[$idCasa]['gols_contra'] += $partida['gols_fora'];
-        $teams[$idFora]['gols_pro']    += $partida['gols_fora'];
+        $teams[$idFora]['gols_pro'] += $partida['gols_fora'];
         $teams[$idFora]['gols_contra'] += $partida['gols_casa'];
-
         if ($partida['gols_casa'] > $partida['gols_fora']) {
             $teams[$idCasa]['vitorias']++;
             $teams[$idCasa]['pontos'] += 3;
@@ -244,12 +213,10 @@ foreach ($allMatches as $partida) {
         }
     }
 }
-
 foreach ($teams as $id => &$stats) {
     $stats['saldo'] = $stats['gols_pro'] - $stats['gols_contra'];
 }
 unset($stats);
-
 $teamsList = array_values($teams);
 usort($teamsList, function($a, $b) {
     if ($a['pontos'] !== $b['pontos']) {
@@ -263,6 +230,10 @@ usort($teamsList, function($a, $b) {
     }
     return $b['gols_pro'] - $a['gols_pro'];
 });
+$nomeExibicao = "Refacty Simulador";
+if (isset($_SESSION['usuario_nome'])) {
+    $nomeExibicao = "Olá, " . $_SESSION['usuario_nome'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -273,65 +244,46 @@ usort($teamsList, function($a, $b) {
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-50 min-h-screen">
-
 <header class="bg-green-600 text-white p-4 mb-6">
     <div class="container mx-auto flex items-center justify-between">
-        <div class="text-xl font-bold">REFACTY Simulador</div>
+        <div class="text-xl font-bold"><?php echo $nomeExibicao; ?></div>
         <nav>
             <ul class="flex space-x-4">
                 <li><a target="_blank" href="https://gooat.com.br" class="hover:underline">Outros projetos</a></li>
+                <?php if (!isset($_SESSION['usuario_id'])): ?>
+                    <li><a href="login.php" class="hover:underline">Logar</a></li>
+                    <li><a href="cadastro.php" class="hover:underline">Registrar</a></li>
+                <?php else: ?>
+                    <li><a href="?logout=1" class="hover:underline">Deslogar</a></li>
+                <?php endif; ?>
             </ul>
         </nav>
     </div>
 </header>
-
 <main class="container mx-auto px-4">
     <h1 class="text-3xl font-bold text-green-700 mb-2">BRASILEIRÃO SÉRIE A</h1>
     <h2 class="text-2xl font-bold mb-4">Simulador do Brasileirão 2024</h2>
-    <p class="mb-8">
-        Simule os resultados dos jogos do Brasileirão 2024, definindo manualmente
-        os gols de cada partida. Descubra quem será campeão, quem vai às competições
-        continentais e quem cai para a Série B!
-    </p>
-
+    <p class="mb-8">Simule os resultados dos jogos do Brasileirão 2024, definindo manualmente os gols de cada partida. Descubra quem será campeão, quem vai às competições continentais e quem cai para a Série B!</p>
     <div class="flex items-center space-x-4 mb-4">
-        <form method="post"
-              onsubmit="return confirm('Tem certeza que deseja resetar o campeonato (apagar todos os jogos)?')">
-            <button type="submit" name="reset"
-                    class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
-                Resetar Campeonato
-            </button>
+        <form method="post" onsubmit="return confirm('Tem certeza que deseja resetar o campeonato (apagar todos os jogos)?')">
+            <button type="submit" name="reset" <?php if(!isset($_SESSION['usuario_id'])) echo 'disabled'; ?> class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded <?php if(!isset($_SESSION['usuario_id'])) echo 'opacity-50 cursor-not-allowed'; ?>">Resetar Campeonato</button>
         </form>
-
         <form method="post">
             <input type="hidden" name="rodadaAtual" value="<?php echo $selectedRound; ?>">
-            <button type="submit" name="simularRodada"
-                    class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-                Simular Rodada
-            </button>
+            <button type="submit" name="simularRodada" <?php if(!isset($_SESSION['usuario_id'])) echo 'disabled'; ?> class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded <?php if(!isset($_SESSION['usuario_id'])) echo 'opacity-50 cursor-not-allowed'; ?>">Simular Rodada</button>
         </form>
-
         <?php if ($minRodada < $maxRodada): ?>
             <div class="flex items-center space-x-2">
                 <?php if ($selectedRound > $minRodada): ?>
-                    <a href="?rodada=<?php echo ($selectedRound - 1); ?>"
-                       class="bg-gray-300 hover:bg-gray-400 text-black font-bold py-2 px-3 rounded">
-                        &larr; Rodada Anterior
-                    </a>
+                    <a href="?rodada=<?php echo ($selectedRound - 1); ?>" class="bg-gray-300 hover:bg-gray-400 text-black font-bold py-2 px-3 rounded">&larr; Rodada Anterior</a>
                 <?php endif; ?>
-
                 <span class="font-semibold">Rodada <?php echo $selectedRound; ?></span>
-
                 <?php if ($selectedRound < $maxRodada): ?>
-                    <a href="?rodada=<?php echo ($selectedRound + 1); ?>"
-                       class="bg-gray-300 hover:bg-gray-400 text-black font-bold py-2 px-3 rounded">
-                        Próxima Rodada &rarr;
-                    </a>
+                    <a href="?rodada=<?php echo ($selectedRound + 1); ?>" class="bg-gray-300 hover:bg-gray-400 text-black font-bold py-2 px-3 rounded">Próxima Rodada &rarr;</a>
                 <?php endif; ?>
             </div>
         <?php endif; ?>
     </div>
-
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <section>
             <h3 class="text-xl font-semibold mb-4">Tabela</h3>
@@ -366,8 +318,7 @@ usort($teamsList, function($a, $b) {
                             <td class="px-4 py-2">
                                 <div class="flex items-center">
                                     <?php if (!empty($team['escudo'])): ?>
-                                        <img src="<?php echo htmlspecialchars($team['escudo']); ?>"
-                                             alt="escudo" class="w-5 h-5 mr-2" />
+                                        <img src="<?php echo htmlspecialchars($team['escudo']); ?>" alt="escudo" class="w-5 h-5 mr-2" />
                                     <?php endif; ?>
                                     <span class="truncate"><?php echo $pos . " " . htmlspecialchars($team['nome']); ?></span>
                                 </div>
@@ -383,7 +334,6 @@ usort($teamsList, function($a, $b) {
                     </tbody>
                 </table>
             </div>
-
             <div class="mt-4 space-y-2">
                 <div class="flex items-center space-x-2">
                     <span class="inline-block w-4 h-4 bg-blue-100 border border-blue-300"></span>
@@ -403,7 +353,6 @@ usort($teamsList, function($a, $b) {
                 </div>
             </div>
         </section>
-
         <section>
             <h3 class="text-xl font-semibold mb-4"><?php echo $selectedRound; ?>ª Rodada</h3>
             <?php if (!empty($selectedRoundMatches)): ?>
@@ -412,45 +361,27 @@ usort($teamsList, function($a, $b) {
                     setlocale(LC_TIME, 'pt_BR.utf8');
                     foreach ($selectedRoundMatches as $match):
                         $dt = new DateTime($match['data_partida']);
-                        $dataFormatada = strftime("%a %d/%m/%Y", $dt->getTimestamp());
+                        $dataFormatada = $dt->format("D d/m/Y");
                         $valorCasa = ($match['gols_casa'] === null) ? '' : $match['gols_casa'];
                         $valorFora = ($match['gols_fora'] === null) ? '' : $match['gols_fora'];
-                        ?>
+                    ?>
                         <div class="border rounded p-4 bg-white shadow flex flex-col space-y-2">
                             <p class="text-sm text-gray-500"><?php echo $dataFormatada; ?></p>
                             <div class="flex items-center justify-between">
                                 <div class="flex items-center space-x-1">
                                     <?php if (!empty($match['escudo_casa'])): ?>
-                                        <img src="<?php echo htmlspecialchars($match['escudo_casa']); ?>"
-                                             alt="escudo casa" class="w-5 h-5" />
+                                        <img src="<?php echo htmlspecialchars($match['escudo_casa']); ?>" alt="escudo casa" class="w-5 h-5" />
                                     <?php endif; ?>
-                                    <span class="font-semibold text-lg">
-                                        <?php echo htmlspecialchars($match['time_casa_sigla']); ?>
-                                    </span>
+                                    <span class="font-semibold text-lg"><?php echo htmlspecialchars($match['time_casa_sigla']); ?></span>
                                 </div>
-
-                                <input type="number"
-                                       min="0"
-                                       class="w-12 border rounded px-2 text-center mx-1"
-                                       value="<?php echo $valorCasa; ?>"
-                                       oninput="handleInput(this, <?php echo $match['id']; ?>, 'casa')">
-
+                                <input type="number" min="0" class="w-12 border rounded px-2 text-center mx-1" value="<?php echo $valorCasa; ?>" oninput="handleInput(this, <?php echo $match['id']; ?>, 'casa')" <?php if(!isset($_SESSION['usuario_id'])) echo 'disabled'; ?>>
                                 <span class="mx-2">x</span>
-
-                                <input type="number"
-                                       min="0"
-                                       class="w-12 border rounded px-2 text-center mx-1"
-                                       value="<?php echo $valorFora; ?>"
-                                       oninput="handleInput(this, <?php echo $match['id']; ?>, 'fora')">
-
+                                <input type="number" min="0" class="w-12 border rounded px-2 text-center mx-1" value="<?php echo $valorFora; ?>" oninput="handleInput(this, <?php echo $match['id']; ?>, 'fora')" <?php if(!isset($_SESSION['usuario_id'])) echo 'disabled'; ?>>
                                 <div class="flex items-center space-x-1">
                                     <?php if (!empty($match['escudo_fora'])): ?>
-                                        <img src="<?php echo htmlspecialchars($match['escudo_fora']); ?>"
-                                             alt="escudo fora" class="w-5 h-5" />
+                                        <img src="<?php echo htmlspecialchars($match['escudo_fora']); ?>" alt="escudo fora" class="w-5 h-5" />
                                     <?php endif; ?>
-                                    <span class="font-semibold text-lg ml-2">
-                                        <?php echo htmlspecialchars($match['time_fora_sigla']); ?>
-                                    </span>
+                                    <span class="font-semibold text-lg ml-2"><?php echo htmlspecialchars($match['time_fora_sigla']); ?></span>
                                 </div>
                             </div>
                         </div>
@@ -462,74 +393,66 @@ usort($teamsList, function($a, $b) {
         </section>
     </div>
 </main>
-
 <footer class="bg-green-600 text-white py-4 mt-8">
     <div class="container mx-auto text-center">
         <p>&copy; Refacty 2025 - Simulador do Brasileirão</p>
     </div>
 </footer>
-
 <script>
-    let debounceTimer = null;
-    let matchScores = {};
-
-    function handleInput(inputElem, matchId, tipo) {
-        let val = parseInt(inputElem.value, 10);
-        if (isNaN(val) || val < 0) {
-            val = 0;
-        }
-        if (val < 0) {
-            val = 0;
-            inputElem.value = 0;
-        }
-
-        if (!matchScores[matchId]) {
-            matchScores[matchId] = { casa: null, fora: null };
-        }
-        if (tipo === 'casa') {
-            if (inputElem.value.trim() === '') {
-                matchScores[matchId].casa = null;
-            } else {
-                matchScores[matchId].casa = val;
-            }
+let debounceTimer = null;
+let matchScores = {};
+function handleInput(inputElem, matchId, tipo) {
+    let val = parseInt(inputElem.value, 10);
+    if (isNaN(val) || val < 0) {
+        val = 0;
+    }
+    if (val < 0) {
+        val = 0;
+        inputElem.value = 0;
+    }
+    if (!matchScores[matchId]) {
+        matchScores[matchId] = { casa: null, fora: null };
+    }
+    if (tipo === 'casa') {
+        if (inputElem.value.trim() === '') {
+            matchScores[matchId].casa = null;
         } else {
-            if (inputElem.value.trim() === '') {
-                matchScores[matchId].fora = null;
-            } else {
-                matchScores[matchId].fora = val;
-            }
+            matchScores[matchId].casa = val;
         }
-
-        if (matchScores[matchId].casa !== null && matchScores[matchId].fora !== null) {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                updatePlacar(matchId, matchScores[matchId].casa, matchScores[matchId].fora);
-            }, 900);
+    } else {
+        if (inputElem.value.trim() === '') {
+            matchScores[matchId].fora = null;
+        } else {
+            matchScores[matchId].fora = val;
         }
     }
-
-    function updatePlacar(matchId, golsCasa, golsFora) {
-        const formData = new FormData();
-        formData.append('action', 'updatePlacar');
-        formData.append('match_id', matchId);
-        formData.append('gols_casa', golsCasa);
-        formData.append('gols_fora', golsFora);
-
-        fetch('<?php echo $_SERVER["PHP_SELF"]; ?>', {
-            method: 'POST',
-            body: formData
-        })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    location.reload();
-                } else {
-                    console.error('Erro ao atualizar placar:', data.message || '');
-                }
-            })
-            .catch(err => console.error(err));
+    if (matchScores[matchId].casa !== null && matchScores[matchId].fora !== null) {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            updatePlacar(matchId, matchScores[matchId].casa, matchScores[matchId].fora);
+        }, 900);
     }
+}
+function updatePlacar(matchId, golsCasa, golsFora) {
+    const formData = new FormData();
+    formData.append('action', 'updatePlacar');
+    formData.append('match_id', matchId);
+    formData.append('gols_casa', golsCasa);
+    formData.append('gols_fora', golsFora);
+    fetch('<?php echo $_SERVER["PHP_SELF"]; ?>', {
+        method: 'POST',
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            location.reload();
+        } else {
+            console.error('Erro ao atualizar placar:', data.message || '');
+        }
+    })
+    .catch(err => console.error(err));
+}
 </script>
-
 </body>
 </html>
