@@ -12,29 +12,23 @@ try {
 }
 
 function gerarConfrontosBrasileirao(PDO $conn) {
-    // Buscar todos os times (IDs) em ordem
     $sqlTimes = "SELECT id FROM times ORDER BY nome";
     $stmtTimes = $conn->query($sqlTimes);
-    $allTeams = $stmtTimes->fetchAll(PDO::FETCH_COLUMN); // array de IDs
+    $allTeams = $stmtTimes->fetchAll(PDO::FETCH_COLUMN);
 
     $n = count($allTeams);
     if ($n < 2) {
         return;
     }
 
-    // --- 1) MÉTODO CIRCLE (1º TURNO) ---
-    // Retiramos o primeiro time como "pivô" e rodamos os demais ao redor
-    // para gerar (n-1) rodadas, cada time jogando 1x por rodada.
-    $pivo   = array_shift($allTeams);  // remove o primeiro
-    $others = $allTeams;               // os restantes
-    $m = $n - 1; // número de rodadas no turno (ex: 20 times => 19 rodadas)
+    $pivo   = array_shift($allTeams);
+    $others = $allTeams;
+    $m = $n - 1;
 
     $roundsIda = [];
 
     for ($roundIndex = 0; $roundIndex < $m; $roundIndex++) {
         $roundMatches = [];
-
-        // Primeiro par: pivô vs time do final da lista
         $pivoCasa = (($roundIndex % 2) == 0);
         $timeForaIndex = count($others) - 1 - $roundIndex;
         if ($timeForaIndex < 0) {
@@ -42,16 +36,14 @@ function gerarConfrontosBrasileirao(PDO $conn) {
         }
         $timeForaId = $others[$timeForaIndex];
 
-        // Partida do pivô
         if ($pivoCasa) {
             $roundMatches[] = ['casa' => $pivo, 'fora' => $timeForaId];
         } else {
             $roundMatches[] = ['casa' => $timeForaId, 'fora' => $pivo];
         }
 
-        // Agora formar pares entre os demais times
         $temp = $others;
-        array_splice($temp, $timeForaIndex, 1); // remove do array
+        array_splice($temp, $timeForaIndex, 1);
 
         $half = count($temp) / 2;
         $left  = array_slice($temp, 0, $half);
@@ -61,7 +53,6 @@ function gerarConfrontosBrasileirao(PDO $conn) {
         for ($i = 0; $i < $half; $i++) {
             $teamA = $left[$i];
             $teamB = $right[$i];
-            // Alternar mando: roundIndex par => A em casa
             if ($roundIndex % 2 == 0) {
                 $roundMatches[] = [ 'casa' => $teamA, 'fora' => $teamB ];
             } else {
@@ -70,18 +61,14 @@ function gerarConfrontosBrasileirao(PDO $conn) {
         }
 
         $roundsIda[] = $roundMatches;
-
-        // Rotacionar
         $last = array_pop($others);
         array_unshift($others, $last);
     }
 
-    // --- 2) GERA 2º TURNO (inverte mando) ---
     $roundsVolta = [];
     foreach ($roundsIda as $rodada) {
         $rodadaVolta = [];
         foreach ($rodada as $partida) {
-            // Inverte casa e fora
             $rodadaVolta[] = [
                 'casa' => $partida['fora'],
                 'fora' => $partida['casa']
@@ -90,9 +77,8 @@ function gerarConfrontosBrasileirao(PDO $conn) {
         $roundsVolta[] = $rodadaVolta;
     }
 
-    // Agora inserimos as rodadas na tabela "partidas" (38 rodadas total)
     $dataInicial = new DateTime('2024-04-01 15:00:00');
-    $intervalo   = new DateInterval('P3D'); // 3 dias
+    $intervalo   = new DateInterval('P3D');
     $stmtInsert = $conn->prepare("
        INSERT INTO partidas
        (time_casa_id, time_fora_id, rodada, data_partida, gols_casa, gols_fora, campeonato)
@@ -103,7 +89,6 @@ function gerarConfrontosBrasileirao(PDO $conn) {
     $rodadaNumero = 1;
     $dataPartida  = clone $dataInicial;
 
-    // 1º TURNO
     foreach ($roundsIda as $roundMatches) {
         foreach ($roundMatches as $partida) {
             $stmtInsert->execute([
@@ -116,7 +101,6 @@ function gerarConfrontosBrasileirao(PDO $conn) {
         $dataPartida->add($intervalo);
         $rodadaNumero++;
     }
-    // 2º TURNO
     foreach ($roundsVolta as $roundMatches) {
         foreach ($roundMatches as $partida) {
             $stmtInsert->execute([
@@ -132,12 +116,26 @@ function gerarConfrontosBrasileirao(PDO $conn) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset'])) {
-    // Apagar partidas
     $conn->exec("TRUNCATE TABLE partidas");
-    // Gerar novamente (38 rodadas)
     gerarConfrontosBrasileirao($conn);
-    // Redirecionar
     header("Location: " . $_SERVER['PHP_SELF']);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['simularRodada'])) {
+    $sqlSim = "SELECT id FROM partidas WHERE rodada = :rodada AND (gols_casa IS NULL OR gols_fora IS NULL)";
+    $stmtSim = $conn->prepare($sqlSim);
+    $stmtSim->execute([':rodada' => $_POST['rodadaAtual'] ?? 1]);
+    $matchesSim = $stmtSim->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($matchesSim as $m) {
+        $gc = rand(0,5);
+        $gf = rand(0,5);
+        $u = $conn->prepare("UPDATE partidas SET gols_casa = :gc, gols_fora = :gf WHERE id = :id");
+        $u->execute([':gc'=>$gc, ':gf'=>$gf, ':id'=>$m['id']]);
+    }
+    $r = $_POST['rodadaAtual'] ?? 1;
+    header("Location: " . $_SERVER['PHP_SELF']."?rodada=".$r);
     exit;
 }
 
@@ -227,7 +225,6 @@ foreach ($allMatches as $partida) {
 
         $teams[$idCasa]['gols_pro']    += $partida['gols_casa'];
         $teams[$idCasa]['gols_contra'] += $partida['gols_fora'];
-
         $teams[$idFora]['gols_pro']    += $partida['gols_fora'];
         $teams[$idFora]['gols_contra'] += $partida['gols_casa'];
 
@@ -303,6 +300,14 @@ usort($teamsList, function($a, $b) {
             <button type="submit" name="reset"
                     class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
                 Resetar Campeonato
+            </button>
+        </form>
+
+        <form method="post">
+            <input type="hidden" name="rodadaAtual" value="<?php echo $selectedRound; ?>">
+            <button type="submit" name="simularRodada"
+                    class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                Simular Rodada
             </button>
         </form>
 
@@ -408,13 +413,11 @@ usort($teamsList, function($a, $b) {
                     foreach ($selectedRoundMatches as $match):
                         $dt = new DateTime($match['data_partida']);
                         $dataFormatada = strftime("%a %d/%m/%Y", $dt->getTimestamp());
-
                         $valorCasa = ($match['gols_casa'] === null) ? '' : $match['gols_casa'];
                         $valorFora = ($match['gols_fora'] === null) ? '' : $match['gols_fora'];
                         ?>
                         <div class="border rounded p-4 bg-white shadow flex flex-col space-y-2">
                             <p class="text-sm text-gray-500"><?php echo $dataFormatada; ?></p>
-
                             <div class="flex items-center justify-between">
                                 <div class="flex items-center space-x-1">
                                     <?php if (!empty($match['escudo_casa'])): ?>
@@ -460,7 +463,6 @@ usort($teamsList, function($a, $b) {
     </div>
 </main>
 
-<!-- Rodapé -->
 <footer class="bg-green-600 text-white py-4 mt-8">
     <div class="container mx-auto text-center">
         <p>&copy; Refacty 2025 - Simulador do Brasileirão</p>
