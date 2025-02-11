@@ -13,7 +13,7 @@ try {
 }
 
 // ======================================================================
-// SIMULAÇÃO: Se o usuário clicar em “Simular Rodada”, atualiza os jogos da próxima rodada
+// SIMULAÇÃO: Se o usuário clicar em “Simular Rodada”, atualiza os jogos da próxima rodadaa
 // ======================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['simular'])) {
     // Primeiro, determinamos qual foi a última rodada simulada
